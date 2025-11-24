@@ -6,7 +6,10 @@
 ## Changed :
 - Switch OEM device to Sonix Boot Loader then update firmware from bootloader  
 
-
+## Build on Linux
+```
+$ sudo apt install libhidapi-dev
+```
 ### Add Command
 - `--xvidpid -x`     Set VID for device to receive reboot 
 

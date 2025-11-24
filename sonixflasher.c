@@ -284,9 +284,8 @@ bool hid_set_feature(hid_device *dev, unsigned char *data, size_t length) {
 int sn32_decode_chip(unsigned char *data) {
     // data[8-11] holds the bootloader version
     if (data[8] == 32) {
-        printf("Sonix SN32 Detected.\n");
-        printf("\n");
-        printf("Checking variant... ");
+        printf("\tSonix SN32 Detected.\n");
+        printf("\tChecking variant... ");
 
         int sn32_family;
         switch (data[9]) {
@@ -387,7 +386,7 @@ int sn32_decode_chip(unsigned char *data) {
 
 bool sn32_check_isp_code_option(unsigned char *data) {
     uint16_t received_code_option = (data[12] << 8) | data[13];
-    printf("Checking Code Option Table... Expected: 0x%04X Received: 0x%04X.\n", code_option, received_code_option);
+    printf("\tChecking Code Option Table... Expected: 0x%04X Received: 0x%04X.\n", code_option, received_code_option);
     if (received_code_option != code_option) {
         printf("Updating Code Option Table from 0x%04X to 0x%04X\n", code_option, received_code_option);
         code_option = received_code_option;
@@ -419,7 +418,7 @@ int sn32_get_code_security(unsigned char *data) {
             return cs_level;
     }
 
-    printf("Current Security level: CS%d. Code Security value: 0x%04X.\n", cs_level, cs_value);
+    printf("\tCurrent Security level: CS%d. Code Security value: 0x%04X.\n", cs_level, cs_value);
     return cs_level;
 }
 
@@ -536,6 +535,50 @@ bool send_magic_command_2(hid_device *dev, const uint32_t *command) {
     return false;
 }
 
+bool send_magic_command_output(hid_device *dev, const uint32_t *command) {
+    uint8_t attempt_no = 1;
+
+    // Report ID + payload (32 bytes total)
+    unsigned char send_buf[1 + 31];
+    memset(send_buf, 0, sizeof(send_buf));
+
+    // Output Report ID = 0x03
+    send_buf[0] = 0x03;
+
+    // Two uint32_t magic values in little endian
+    put_u32_le(&send_buf[1], command[0]); // RETURN_KERNEL_0
+    put_u32_le(&send_buf[5], command[1]); // RETURN_KERNEL_1
+
+    if (debug) {
+        printf("\nSending OEM magic OUTPUT report...\n");
+        print_data(send_buf, sizeof(send_buf));
+    }
+
+    while (attempt_no <= MAX_ATTEMPTS) {
+        /*
+         * hid_write = Output Report
+         * send_buf �ݭn�]�t Report ID
+         */
+        int res = hid_write(dev, send_buf, sizeof(send_buf));
+
+        if (res >= 0) {
+            if (debug) {
+                printf("hid_write returned %d bytes\n", res);
+            }            
+            return true;
+        }
+
+        wprintf(L"hid_write failed: %ls\n", hid_error(dev));
+
+        printf("Failed to send reboot magic OUTPUT report (ID 0x03), retrying in 1 second... (%d/%d)\n",
+               attempt_no, MAX_ATTEMPTS);
+        sleep(1);
+        attempt_no++;
+    }
+
+    return false;
+}
+
 bool reboot_to_bootloader(hid_device *dev, char *oem_option) {
     uint32_t sonix_reboot[2] = {0x5AA555AA, 0xCC3300FF};
     uint32_t hfd_reboot[2]   = {0x5A8942AA, 0xCC6271FF};
@@ -550,7 +593,7 @@ bool reboot_to_bootloader(hid_device *dev, char *oem_option) {
     } else if (strcmp(oem_option, "hfd") == 0) {
         return send_magic_command(dev, hfd_reboot);
     } else  if (strcmp(oem_option, "chicony") == 0) {
-        return send_magic_command_2(dev,cny_reboot);
+        return send_magic_command_output(dev,cny_reboot);
     }	
 	
     printf("ERROR: unsupported reboot option selected.\n");
@@ -563,18 +606,33 @@ bool boot_switch(hid_device *dev, bool oem_reboot, char *oem_option)
         return true;
 
     if (oem_reboot) {
-        printf("Requesting bootloader reboot...\n");
-        if (reboot_to_bootloader(dev, oem_option)){
-            printf("Bootloader reboot request success.\n");
+        printf("\tRequesting bootloader reboot...\n");
+        if (reboot_to_bootloader(dev, oem_option))
+        {
+            printf("\tBootloader reboot request success.\n");
             return true;
         }    
-        else {
+        else 
+        {
             printf("ERROR: Bootloader reboot request failed.\n");
             return false;
         }
     }
     return  true;
 }
+
+hid_device* open_fresh_device(uint16_t vid, uint16_t pid)
+{
+    struct hid_device_info* list = hid_enumerate(vid, pid);
+    if (!list)
+        return NULL;
+
+    // Windows: use first instance - ensures newest handle
+    hid_device* dev = hid_open_path(list->path);
+    hid_free_enumeration(list);
+    return dev;
+}
+
 
 bool protocol_init(hid_device *dev, bool oem_reboot, char *oem_option) 
 {
@@ -583,8 +641,7 @@ bool protocol_init(hid_device *dev, bool oem_reboot, char *oem_option)
     chip               = 0;
 
     // 01) Initialize
-    printf("\n");
-    printf("Fetching flash version...\n");
+    printf("\tFetching flash version...\n");
 
     clear_buffer(buf, REPORT_SIZE);
     buf[0] = CMD_GET_FW_VERSION;
@@ -597,9 +654,11 @@ bool protocol_init(hid_device *dev, bool oem_reboot, char *oem_option)
         sleep(3);
         attempt_no++;
     }
-    if (attempt_no > MAX_ATTEMPTS) return false;
+    if (attempt_no > MAX_ATTEMPTS) 
+        return false;
 
-    if (!hid_get_feature(dev, buf, REPORT_SIZE, CMD_GET_FW_VERSION)) return false;
+    if (!hid_get_feature(dev, buf, REPORT_SIZE, CMD_GET_FW_VERSION)) 
+        return false;
     chip = sn32_decode_chip(buf);
     if (chip == 0) return false;
     cs_level = sn32_get_code_security(buf);
@@ -621,8 +680,8 @@ bool protocol_init(hid_device *dev, bool oem_reboot, char *oem_option)
 bool protocol_code_option_check(hid_device *dev) {
     unsigned char buf[REPORT_SIZE];
     // 02) Prepare for Code Option Table check
-    printf("\n");
-    printf("Checking Code Option Table...\n");
+//    printf("\n");
+    printf("\tChecking Code Option Table...\n");
     clear_buffer(buf, REPORT_SIZE);
     buf[0] = CMD_COMPARE_CODE_OPTION;
     write_buffer_16(buf + 1, CMD_BASE);
@@ -675,8 +734,8 @@ bool erase_flash(hid_device *dev, uint16_t page_start, uint16_t page_end, uint16
 bool protocol_reboot_user(hid_device *dev) {
     unsigned char buf[REPORT_SIZE];
     // 08) Reboot to User Mode
-    printf("\n");
-    printf("Flashing done. Rebooting.\n");
+ //   printf("\n");
+    printf("\tFlashing done. Rebooting.\n");
     clear_buffer(buf, REPORT_SIZE);
     buf[0] = CMD_RETURN_USER_MODE;
     write_buffer_16(buf + 1, CMD_BASE);
@@ -710,8 +769,8 @@ bool flash(hid_device *dev, long offset, const char *file_name, long fw_size, bo
     }
 
     // 05) Enable program
-    printf("\n");
-    printf("Enabling Program mode...\n");
+ //   printf("\n");
+    printf("\tEnabling Program mode...\n");
 
     clear_buffer(buf, REPORT_SIZE);
     buf[0] = CMD_ENABLE_PROGRAM;
@@ -724,7 +783,7 @@ bool flash(hid_device *dev, long offset, const char *file_name, long fw_size, bo
     clear_buffer(buf, REPORT_SIZE);
 
     // 06) Flash
-    printf("Flashing device, please wait...\n");
+    printf("\tFlashing device, please wait...\n");
 
     size_t   bytes_read = 0;
     uint16_t checksum   = 0;
@@ -748,19 +807,19 @@ bool flash(hid_device *dev, long offset, const char *file_name, long fw_size, bo
         clear_buffer(buf, REPORT_SIZE);
     }
 
-    printf("Flashed File Checksum: 0x%04x\n", checksum);
+    printf("\tFlashed File Checksum: 0x%04x\n", checksum);
     clear_buffer(buf, REPORT_SIZE);
     fclose(firmware);
 
     // 07) Verify flash complete
-    printf("\n");
-    printf("Verifying flash completion...\n");
+//    printf("\n");
+    printf("4.1 Verifying flash completion...\n");
     if (!hid_get_feature(dev, buf, REPORT_SIZE, CMD_ENABLE_PROGRAM)) return false;
     if (read_response_32(buf, LAST_CHUNK_OFFSET, last_chunk, &resp)) {
-        printf("Flash completion verified. \n");
+        printf("\tFlash completion verified. \n");
         uint16_t resp_16 = (uint16_t)resp;
         if (read_response_16(buf, 8, checksum, &resp_16)) {
-            printf("Flash Verification Checksum: OK!\n");
+            printf("\tFlash Verification Checksum: OK!\n");
             return true;
         } else {
             if (offset != 0) {
@@ -876,8 +935,8 @@ long prepare_file_to_flash(const char *file_name, bool flash_jumploader) {
         fclose(fp);
         return -1;
     }
-    printf("\n");
-    printf("File size: %ld bytes\n", file_size);
+//    printf("\n");
+    printf("\tFile size: %ld bytes\n", file_size);
 
     // If jumploader is not 0x200 in length, add padded zeroes to file
     if (flash_jumploader && file_size < QMK_OFFSET_DEFAULT) {
@@ -946,6 +1005,68 @@ char *get_full_path(const char *file_name) {
     return full_path;
 }
 
+static void dump_hid_devices(uint16_t vid, uint16_t pid)
+{
+    struct hid_device_info *devs, *cur;
+
+    devs = hid_enumerate(vid, pid);
+    if (!devs) {
+        printf("No HID devices for %04hx:%04hx\n", vid, pid);
+        return;
+    }
+
+    printf("Enumerating HID devices for %04hx:%04hx:\n", vid, pid);
+    for (cur = devs; cur; cur = cur->next) {
+        printf("  path: %s\n", cur->path ? cur->path : "(null)");
+        printf("    interface_number : %d\n", cur->interface_number);
+        printf("    usage_page       : 0x%04hx\n", cur->usage_page);
+        printf("    usage            : 0x%04hx\n", cur->usage);
+        printf("    serial_number    : %ls\n", cur->serial_number ? cur->serial_number : L"(null)");
+        printf("    product_string   : %ls\n", cur->product_string ? cur->product_string : L"(null)");
+        printf("\n");
+    }
+
+    hid_free_enumeration(devs);
+}
+
+hid_device* open_matching_device(uint16_t vid, uint16_t pid, bool prefer_vendor_page)
+{
+    struct hid_device_info *list, *cur, *best = NULL;
+
+    list = hid_enumerate(vid, pid);
+    if (!list)
+        return NULL;
+
+    for (cur = list; cur; cur = cur->next) {
+        if (cur->vendor_id != vid || cur->product_id != pid)
+            continue;
+
+        if (prefer_vendor_page) {
+            // �u���ϥ� Vendor-defined Usage Page (0xFF00~0xFFFF)
+            if (cur->usage_page >= 0xFF00 && cur->usage_page <= 0xFFFF) {
+                best = cur;
+                break;  // ���N�����γo��
+            }
+        }
+
+        // �Y�٨S���B�N�ȮɰO�U�Ĥ@���A�� fallback
+        if (!best)
+            best = cur;
+    }
+
+    hid_device *dev = NULL;
+    if (best) {
+        if (debug) {
+            printf("Opening HID path: %s (iface=%d, usage_page=0x%04hx, usage=0x%04hx)\n",
+                   best->path, best->interface_number, best->usage_page, best->usage);
+        }
+        dev = hid_open_path(best->path);
+    }
+
+    hid_free_enumeration(list);
+    return dev;
+}
+
 int main(int argc, char *argv[]) {
     int         opt, opt_index;
     hid_device *    handle;
@@ -960,8 +1081,9 @@ int main(int argc, char *argv[]) {
     char    *endptr           = NULL;
     char    *reboot_opt       = NULL;
     bool     reboot_requested = false;
-    debug                     = false;
+ //   debug                     = false;
     bool no_offset_check      = false;
+    bool boot_mode            = true;
 
     if (argc < 2) {
         print_usage(PROJECT_NAME);
@@ -1077,25 +1199,47 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-        printf("Firmware to flash: %s with offset 0x%04lx, device: 0x%04x/0x%04x.\n", file_name, offset, vid, pid);
+    if ( xvid == 0 && xpid == 0)
+    {
+        boot_mode = true;
+        printf("[Boot] Flash device: 0x%04x/0x%04x.\n", vid, pid);  
+    }          
+    else
+    {
+        boot_mode = false;
+        printf("[Live] Flash device: 0x%04x/0x%04x.\n", xvid, xpid);      
+    }      
+
+    printf("\tFirmware%s\n", file_name);
     
     // Try to open the device
     if (hid_init() < 0) {
         fprintf(stderr, "ERROR: Could not initialize HID.\n");
         exit(1);
     }
-    printf("\n");
-    printf("\n");
-    printf("Opening device...\n");
 
-    handle = hid_open(xvid, xpid, NULL);
-  
+    if (debug) {
+        if (boot_mode) {
+            dump_hid_devices(vid, pid);
+        } else {
+            dump_hid_devices(xvid, xpid);
+        }    
+    }
+
+    printf("1. Opening device...\n");
+
+    if ( boot_mode)
+        handle = open_matching_device(vid, pid, false);      // ISP bootloader �q�`�u���@�� HID
+    else
+        handle = open_matching_device(xvid, xpid, true);     // Live OEM �˸m�q�`�ݭn vendor page
+
+
     uint8_t attempt_no = 1;
     while (handle == NULL && attempt_no <= MAX_ATTEMPTS) // Try {MAX ATTEMPTS} to connect to device.
     {
-        printf("Device failed to open, re-trying in 3 seconds. Attempt %d of %d...\n", attempt_no, MAX_ATTEMPTS);
+        printf("...Device failed to open, re-trying in 3 seconds. Attempt %d of %d...\n", attempt_no, MAX_ATTEMPTS);
         sleep(3);
-        handle = hid_open(xvid, xpid, NULL);        
+        handle = open_fresh_device(xvid, xpid);        
         attempt_no++;
     }
 
@@ -1106,8 +1250,7 @@ int main(int argc, char *argv[]) {
         error(handle);
     }   
 
-    printf("\n");
-    printf("Device opened successfully...\n");
+    printf("\tDevice opened successfully...\n");
 
     // Check VID/PID
     if (vid != SONIX_VID || !is_known_isp_pid(pid)) {
@@ -1117,27 +1260,33 @@ int main(int argc, char *argv[]) {
         sleep(3);
     }
 
-    if (! boot_switch(handle, reboot_requested, reboot_opt))
+    if ( !boot_mode)
     {
-        fprintf(stderr, "Switch to bootloader failed.\n");
-        free(file_name);
-        error(handle);
-    }  
+        printf("1.1. Reopen for Live mode...\n");        
+        if (! boot_switch(handle, reboot_requested, reboot_opt))
+        {
+            fprintf(stderr, "Switch to bootloader failed.\n");
+            free(file_name);
+            error(handle);
+        }  
 
-    sleep(3);   
-    cleanup(handle);    
-    handle = hid_open(vid, pid, NULL);    
-    
-    printf("\n");
-    if (handle == NULL )
-    {
-        fprintf(stderr, "Reopen device failed\n");
-        free(file_name);
-        error(handle);
-    }
+        sleep(5);   
+        cleanup(handle);    
+        sleep(1);       
+ //       handle = open_fresh_device(vid, pid);    
+        handle = open_matching_device(vid, pid, false);
 
-    printf("Reopen Device opened successfully...\n");
+        if (handle == NULL )
+        {
+            fprintf(stderr, "Reopen device failed\n");
+            free(file_name);
+            error(handle);
+        }
 
+        printf("\tReopen Device opened successfully...\n");
+    }        
+
+    printf("2. Proticol Init...\n");      
     attempt_no = 1;
     bool ok    = protocol_init(handle, reboot_requested, reboot_opt);
     while (!ok && attempt_no <= MAX_ATTEMPTS) {
@@ -1146,36 +1295,54 @@ int main(int argc, char *argv[]) {
         ok = protocol_init(handle, reboot_requested, reboot_opt);
         attempt_no++;
     }
-        if (!ok) error(handle);
+
+    if (!ok) 
+        error(handle);
     sleep(1);
-        if (chip != SN240B && chip != SN260) ok = protocol_code_option_check(handle);
-    if (!ok) error(handle);
-        sleep(1);
-        if (cs_level != 0) {
+
+    if (chip != SN240B && chip != SN260) 
+        ok = protocol_code_option_check(handle);
+    if (!ok) 
+        error(handle);
+    sleep(1);
+    if (cs_level != 0) 
+    {
         printf("Resetting Code Security from CS%d to CS%d...\n", cs_level, 0);
         ok = protocol_code_option_set(handle, code_option, CS0);
     }
-        if (!ok) error(handle);
+    if (!ok) 
+        error(handle);
     sleep(1);
-        if (chip != SN240B && chip != SN260) ok = erase_flash(handle, 0, USER_ROM_PAGES, BLANK_CHECKSUM);
-        if (!ok) error(handle);
+    if (chip != SN240B && chip != SN260) 
+        ok = erase_flash(handle, 0, USER_ROM_PAGES, BLANK_CHECKSUM);
+    if (!ok) 
+        error(handle);
     sleep(1);
 
-        long prepared_file_size = prepare_file_to_flash(file_name, flash_jumploader);
-        if (prepared_file_size < 0) {
-            fprintf(stderr, "ERROR: File preparation failed.\n");
-            free(file_name);
-            error(handle);
-        }
-        if (((flash_jumploader && sanity_check_jumploader_firmware(prepared_file_size)) || (!flash_jumploader && sanity_check_firmware(prepared_file_size, offset))) && (flash(handle, offset, file_name, prepared_file_size, no_offset_check))) {
-            printf("Device succesfully flashed!\n");
-            sleep(2);
-            protocol_reboot_user(handle);
-        } else {
-            fprintf(stderr, "ERROR: Could not flash the device. Try again.\n");
-            free(file_name);
-            error(handle);
-        }
+    printf("3. Prepare file...\n");      
+    long prepared_file_size = prepare_file_to_flash(file_name, flash_jumploader);
+    if (prepared_file_size < 0) 
+    {
+        fprintf(stderr, "ERROR: File preparation failed.\n");
+        free(file_name);
+        error(handle);
+    }
+
+    printf("4. Programming Flash...\n");      
+    if (((flash_jumploader && sanity_check_jumploader_firmware(prepared_file_size)) || 
+        (!flash_jumploader && sanity_check_firmware(prepared_file_size, offset))) && 
+            (flash(handle, offset, file_name, prepared_file_size, no_offset_check))) 
+            {
+                printf("\tDevice succesfully flashed!\n");
+                sleep(2);
+                printf("5. Flash complete  OK.\n");                     
+                protocol_reboot_user(handle);
+            } else 
+            {
+                fprintf(stderr, "ERROR: Could not flash the device. Try again.\n");
+                free(file_name);
+                error(handle);
+            }
 
     free(file_name);
     cleanup(handle);
