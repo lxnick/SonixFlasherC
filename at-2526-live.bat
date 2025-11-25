@@ -1,0 +1,1 @@
+sonixflasher.exe --xvidpid 04f2/25a0 --reboot chicony --vidpid 0c45/7040  --file %1

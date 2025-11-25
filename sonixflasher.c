@@ -89,9 +89,10 @@
 
 //#define PROJECT_NAME "sonixflasher"
 //#define PROJECT_VER "2.0.8"
-#define PROJECT_NAME "sonixflasher-switch"
-#define PROJECT_VER "2.1.0"
+#define PROJECT_NAME "sonixflasher-live"
+#define PROJECT_VER "1.0.0"
 
+#define FLASH_COMPLETE_MESSAGE ">>> Final. Flash completed successfully. Reboot to Normal! <<<"
 
 uint16_t           BLANK_CHECKSUM   = 0x0000;
 uint16_t           CS0              = CS0_0;
@@ -735,12 +736,16 @@ bool protocol_reboot_user(hid_device *dev) {
     unsigned char buf[REPORT_SIZE];
     // 08) Reboot to User Mode
  //   printf("\n");
+ 
     printf("\tFlashing done. Rebooting.\n");
     clear_buffer(buf, REPORT_SIZE);
     buf[0] = CMD_RETURN_USER_MODE;
     write_buffer_16(buf + 1, CMD_BASE);
     if (!hid_set_feature(dev, buf, REPORT_SIZE)) return false;
     clear_buffer(buf, REPORT_SIZE);
+
+    printf("%s\n", FLASH_COMPLETE_MESSAGE );
+ 
     return true;
 }
 
@@ -756,14 +761,14 @@ bool flash(hid_device *dev, long offset, const char *file_name, long fw_size, bo
 
     if (chip == SN260 && !flash_jumploader && offset == 0) // Failsafe when flashing a 268 w/o jumploader and offset
     {
-        printf("Warning: 26X flashing without offset.\n");
-        printf("Warning: POTENTIALLY DANGEROUS OPERATION.\n");
+        printf("\tWarning: 26X flashing without offset.\n");
+        printf("\tWarning: POTENTIALLY DANGEROUS OPERATION.\n");
         sleep(3);
         if (skip_offset_check) {
             printf("Warning: Flashing 26X without offset. Operation will continue after 10s...\n");
             sleep(10);
         } else {
-            printf("Fail safing to offset 0x%04x\n", QMK_OFFSET_DEFAULT);
+            printf("\tFail safing to offset 0x%04x\n", QMK_OFFSET_DEFAULT);
             offset = QMK_OFFSET_DEFAULT;
         }
     }
@@ -789,7 +794,8 @@ bool flash(hid_device *dev, long offset, const char *file_name, long fw_size, bo
     uint16_t checksum   = 0;
     uint32_t last_chunk = 0;
     clear_buffer(buf, REPORT_SIZE);
-    while ((bytes_read = fread(buf, 1, REPORT_SIZE, firmware)) > 0) {
+    while ((bytes_read = fread(buf, 1, REPORT_SIZE, firmware)) > 0) 
+    {
         if (bytes_read < REPORT_SIZE) {
             fprintf(stderr, "WARNING: Read %zu bytes, expected %d bytes.\n", bytes_read, REPORT_SIZE);
         }
@@ -1042,14 +1048,14 @@ hid_device* open_matching_device(uint16_t vid, uint16_t pid, bool prefer_vendor_
             continue;
 
         if (prefer_vendor_page) {
-            // �u���ϥ� Vendor-defined Usage Page (0xFF00~0xFFFF)
+            // Vendor-defined Usage Page (0xFF00~0xFFFF)
             if (cur->usage_page >= 0xFF00 && cur->usage_page <= 0xFFFF) {
                 best = cur;
-                break;  // ���N�����γo��
-            }
+                break;  // 
+                            }
         }
 
-        // �Y�٨S���B�N�ȮɰO�U�Ĥ@���A�� fallback
+        // fallback
         if (!best)
             best = cur;
     }
@@ -1233,7 +1239,6 @@ int main(int argc, char *argv[]) {
     else
         handle = open_matching_device(xvid, xpid, true);     // Live OEM �˸m�q�`�ݭn vendor page
 
-
     uint8_t attempt_no = 1;
     while (handle == NULL && attempt_no <= MAX_ATTEMPTS) // Try {MAX ATTEMPTS} to connect to device.
     {
@@ -1270,7 +1275,7 @@ int main(int argc, char *argv[]) {
             error(handle);
         }  
 
-        sleep(5);   
+        sleep(1);   
         cleanup(handle);    
         sleep(1);       
  //       handle = open_fresh_device(vid, pid);    
@@ -1334,8 +1339,8 @@ int main(int argc, char *argv[]) {
             (flash(handle, offset, file_name, prepared_file_size, no_offset_check))) 
             {
                 printf("\tDevice succesfully flashed!\n");
-                sleep(2);
-                printf("5. Flash complete  OK.\n");                     
+                sleep(1);
+//                printf("Final. Flash completed successfully. Reboot to Normal\n");                     
                 protocol_reboot_user(handle);
             } else 
             {
